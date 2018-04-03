@@ -7,6 +7,7 @@ class Text(object):
     """文本对象"""
     def __init__(self, text):
         self.text= text
+        self._TYPE = "text"
 
 
 class Image(object):
@@ -15,6 +16,7 @@ class Image(object):
         self.title = title
         self.identity = identity
         self.text = text
+        self._TYPE = "image"
 
 class Table(object):
     """表格对象"""
@@ -22,7 +24,7 @@ class Table(object):
         self.title = title
         self.datas = datas
         self.table_type = table_type
-
+        self._TYPE = "table"
 
 class Parts(object):
     """
@@ -30,13 +32,19 @@ class Parts(object):
     """
     _TYPE = None
     def __init__(self, iterable):
-        if _TYPE is None:
+        if self._TYPE is None:
             raise ValueError("_TYPE is None")
         self._items = []
+        _TYPE = self._TYPE
         for item in iterable:
             if _TYPE in ["image"]:
+                if "headline" in item:
+                    title = item.pop("headline")
+                    item["title"] = title
                 item = Image(**item)
             elif _TYPE in ["table"]:
+                if "field_sequence" in item:
+                    item.pop("field_sequence")
                 item = Table(**item)
             elif _TYPE in ["text"]:
                 item = Text(item)
@@ -46,8 +54,11 @@ class Parts(object):
 
     def __getitem__(self, index):
         """重写self[i]"""
-        return self._items[index]
-
+        try:
+            return self._items[index]   
+        except:
+            import pdb; pdb.set_trace()
+        
     def __getslice__(self, start=None, end=None):
         """重写self[i:j]"""
         return self._items[start: end]
@@ -57,11 +68,9 @@ class Parts(object):
         _rel_in_line = False # 判断元素之间的关系，是否在同一行
         # 获取所有元素
         if attr == "all":
-            return (self[:], _rel_in_line)
+            return [self[:], _rel_in_line]
         # 获取单个元素
-        elif "-" not in attr or ":" not in attr:
-            return ([self[int(attr)]], _rel_in_line)
-        else:
+        elif "-" in attr or ":" in attr:       
             # 获取多个元素
             if "-" in attr: 
                 start, end = attr.split("-")
@@ -76,7 +85,9 @@ class Parts(object):
                 start = int(start)
             if end:
                 end = int(end)
-            return (self[start, end], _rel_in_line)
+            return [self[start:end], _rel_in_line]                          
+        else:
+            return [[self[int(attr)]], _rel_in_line]
 
     def __iter__(self):
         return self._items
@@ -122,10 +133,12 @@ class Section(object):
 
     def gen_render_items(self):
         """得到要渲染的真实数据"""
+        sequence = self.sequence
         for it in sequence:
             attr_name, pos = self._get_attr_pos(it)
             attr = getattr(self, attr_name)
             item = getattr(attr, pos)
+            item.append(attr_name)
             self._render_items.append(item)
 
     def _get_attr_pos(self, seq_item):
@@ -135,40 +148,50 @@ class Section(object):
         if "." in seq_item:
             attr_pos = seq_item.split(".")
         else:
-            attr_pos = seq_item
+            attr_pos = [seq_item]
         if len(attr_pos) == 1:
             attr = attr_pos[0]
             pos = "all"
-        elif len(attr_pos) > 1:
-            attr, pos = attr_pos
+        elif len(attr_pos) > 1:            
+            attr, pos = attr_pos            
         return attr, pos
             
     def render(self, doc):
         """渲染区域
         doc: docx.Document对象
         """
+        try:
+            self.gen_render_items()
+        except:
+            raise
         render_items = self._render_items
         for r_item in render_items:
-            real_items, rel_in_line = r_item
-            if rel_in_inline:
-                self._render_inline(real_items, doc)
+            real_items, rel_in_line,attr_name = r_item
+            if rel_in_line:
+                self._render_inline(real_items, doc, attr_name)
             else:
-                self._render_not_inline(real_items, doc)
+                self._render_not_inline(real_items, doc, attr_name)
     
-    def _render_inline(self, real_items, doc):
+    def _render_inline(self, real_items, doc, attr_name):
         """
         同一行的对象
         """
-        p = doc.add_paragraph()
+        if attr_name in ["title"]:
+            p = doc.add_heading()
+        else:
+            p = doc.add_paragraph()
         self._render_real_items(doc, p, real_items)
 
-    def _render_not_inline(self, real_items, doc):
+    def _render_not_inline(self, real_items, doc, attr_name):
         """
         不是同行的对象
         """
         for real_item in real_items:
-            p = doc.add_paragraph()
-            self._render_real_items(p, [real_item])
+            if attr_name in ["title"]:
+                p = doc.add_heading()
+            else:
+                p = doc.add_paragraph()
+            self._render_real_items(doc, p, [real_item])
 
     def _render_real_items(self, doc, p, real_items):
         """分发处理不同的对象"""
@@ -214,8 +237,8 @@ class Section(object):
         table_type = table_item.table_type
         tables = {
             1: doc.add_table(1, 4), # 舆论数据模块表格 
-            2: doc.add_talbe(1, 4), # 典型报道模块表格
-            3: doc.add_talbe(1, 6), # 网民舆论模块表格
+            2: doc.add_table(1, 4), # 典型报道模块表格
+            3: doc.add_table(1, 6), # 网民舆论模块表格
             4: doc.add_table(1, 3), #语种分析模块表格 
             5: doc.add_table(1, 3) #港澳台舆论模块表格 
         }
@@ -228,7 +251,7 @@ class Section(object):
             5: self.__render_5_table
         }
         if tables.get(table_type) and table_handlers.get(table_type):
-            table = table[table_type]
+            table = tables[table_type]
             table_handler = table_handlers[table_type]
             table_handler(table, table_item, table_type)
         else:
@@ -240,7 +263,7 @@ class Section(object):
         header_index = 0
         for header_cell in tb_header.cells:
             text = tb_header_texts[header_index]
-            cell_p = header_cell.add_paragrph(text)
+            cell_p = header_cell.add_paragraph(text)
             header_index += 1
 
     def __render_1_table(self, table, table_item, table_type=None):
@@ -248,7 +271,7 @@ class Section(object):
         {"data":{"新闻": {"number": "", "groupData":[{"no": "", "name": "", "count": ""}]}}}
             
         """
-        tb_header_texts = ["", "序号", "名称", "数量"]
+        tb_header_texts = ["", u"序号", u"名称", u"数量"]
         self.__render_table_header(table, tb_header_texts)
         datas = table_item.datas
         if datas and datas.get('data'):
@@ -297,7 +320,7 @@ class Section(object):
                         while i < 4:
                             if i == 0:
                                 table.cell(count, 0).add_paragraph(u"序号")
-                                table.cell(count, 1).add_paragraph(seq)
+                                table.cell(count, 1).add_paragraph(str(seq))
                                 table.cell(count, 2).add_paragraph(u"标题")
                                 table.cell(count, 3).add_paragraph(title)
                             else:
@@ -305,9 +328,9 @@ class Section(object):
                                 count += 1
                                 if i == 1:
                                     table.cell(count, 0).add_paragraph(u"参与媒体数量（约）")
-                                    table.cell(count, 1).add_paragraph(group_number)
+                                    table.cell(count, 1).add_paragraph(str(group_number))
                                     table.cell(count, 2).add_paragraph(u"共发报道数量（约）")
-                                    table.cell(count, 3).add_paragraph(number)
+                                    table.cell(count, 3).add_paragraph(str(number))
                                 elif i == 2:
                                     table.cell(count, 0).add_paragraph(u"主要参与媒体")
                                     table.cell(count, 1).merge(table.cell(count, 2)).merge(table.cell(count, 3)).add_paragraph(group_name)
@@ -323,14 +346,14 @@ class Section(object):
                             count += 1
                             if i == 0:
                                 table.cell(count, 0).add_paragraph(u"序号")
-                                table.cell(count, 1).add_paragraph(seq)
+                                table.cell(count, 1).add_paragraph(str(seq))
                                 table.cell(count, 2).add_paragraph(u"标题")
                                 table.cell(count, 3).add_paragraph(title)
                             if i == 1:
                                 table.cell(count, 0).add_paragraph(u"参与媒体数量（约）")
-                                table.cell(count, 1).add_paragraph(group_number)
+                                table.cell(count, 1).add_paragraph(str(group_number))
                                 table.cell(count, 2).add_paragraph(u"共发报道数量（约）")
-                                table.cell(count, 3).add_paragraph(number)
+                                table.cell(count, 3).add_paragraph(str(number))
                             elif i == 2:
                                 table.cell(count, 0).add_paragraph(u"主要参与媒体")
                                 table.cell(count, 1).merge(table.cell(count, 2)).merge(table.cell(count, 3)).add_paragraph(group_name)
@@ -367,19 +390,45 @@ class Section(object):
                 row = table.add_row()
                 row_cells = row.cells
                 if table_type == 3:
-                    row_cells[0].add_paragraph(seq)
+                    row_cells[0].add_paragraph(str(seq))
                     row_cells[1].add_paragraph(item.get("Author", ""))
                     row_cells[2].add_paragraph(item.get("Posts", ""))
                     row_cells[1].add_paragraph(item.get("Fans", ""))
                     row_cells[1].add_paragraph(item.get("Follows", ""))
                     row_cells[1].add_paragraph(item.get("Description", ""))
                 elif table_type in [4,]:
-                    row_cells[0].add_paragraph(seq)
+                    row_cells[0].add_paragraph(str(seq))
                     row_cells[1].add_paragraph(item.get("groupName", ""))
-                    row_cells[2].add_paragraph(item.get("count", ""))
+                    row_cells[2].add_paragraph(str(item.get("count", "")))
                 seq += 1
 
     def _get_file_stream(self, file_identity):
         file_manager = self.file_manager
         file_stream = file_manager.get(file_identity)
-        return file_stream.read()
+        return file_stream
+
+
+class HeadPart(object):
+    """处理文档开头部分"""
+    def __init__(self, head):
+        self.head = head
+
+    def render(self, doc):
+        title = self.head.get("title", u"专题分析导出")
+        author = self.head.get("author", u"云润大数据")
+        #datetime = self.get_now_date().decode("utf-8")
+        datetime = self.head.get("datetime") or self.get_now_date().decode("utf-8")
+        doc.add_paragraph(u"内部资料")
+        doc.add_paragraph(u"注意保存")
+        doc.add_heading(title, level=0)
+        p1 = doc.add_paragraph(datetime)
+        p2 = doc.add_paragraph()
+        p2_run1 = p2.add_run(author)
+        p2_run2 = p2.add_run(datetime)
+
+
+    def get_now_date(self):
+        import datetime
+        now = datetime.datetime.now()
+        now_date = now.date().strftime("%Y年%m月%d日")
+        return now_date
